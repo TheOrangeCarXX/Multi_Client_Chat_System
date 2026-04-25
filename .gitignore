@@ -1,0 +1,37 @@
+# Build output
+/build/
+/*.o
+/*.out
+/*.exe
+
+# Compiled binaries
+server
+client
+
+# Logs / generated runtime data
+data/chatlog.txt
+data/*.log
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# CLion / JetBrains
+.idea/
+
+# CodeBlocks
+*.layout
+*.depend
+
+# Debugger / core dumps
+core
+*.core

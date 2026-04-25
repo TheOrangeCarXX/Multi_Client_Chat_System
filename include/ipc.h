@@ -1,0 +1,1 @@
+void send_admin_update(char *msg);

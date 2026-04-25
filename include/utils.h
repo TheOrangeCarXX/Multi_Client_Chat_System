@@ -1,0 +1,1 @@
+void trim_newline(char *str);
