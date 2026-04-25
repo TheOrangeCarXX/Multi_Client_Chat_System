@@ -4,13 +4,21 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include "../include/auth.h"
 
 #define PORT 8080
 #define BUFFER_SIZE 1024
 
 int sockfd;
+char role[50];
 
-/* Thread to continuously receive messages from server */
+void trim_newline(char *str)
+{
+    int len = strlen(str);
+    if (len > 0 && str[len - 1] == '\n')
+        str[len - 1] = '\0';
+}
+
 void *receive_messages(void *arg)
 {
     char buffer[BUFFER_SIZE];
@@ -23,52 +31,49 @@ void *receive_messages(void *arg)
         fflush(stdout);
     }
 
-    printf("\nDisconnected from server.\n");
-    close(sockfd);
+    printf("\nDisconnected.\n");
     exit(0);
-}
-
-/* Remove newline from fgets */
-void trim_newline(char *str)
-{
-    int len = strlen(str);
-    if (len > 0 && str[len - 1] == '\n')
-        str[len - 1] = '\0';
 }
 
 int main()
 {
-    struct sockaddr_in server_addr;
-    pthread_t recv_thread;
-
-    char name[50];
+    char username[50], password[50];
     char message[BUFFER_SIZE];
     char final_message[BUFFER_SIZE + 100];
 
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    printf("Username: ");
+    fgets(username, sizeof(username), stdin);
+    trim_newline(username);
 
-    if (sockfd < 0)
+    printf("Password: ");
+    fgets(password, sizeof(password), stdin);
+    trim_newline(password);
+
+    if (!login_user(username, password, role))
     {
-        perror("Socket failed");
+        printf("Invalid login.\n");
         return 1;
     }
+
+    printf("Login successful. Role = %s\n", role);
+
+    struct sockaddr_in server_addr;
+
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
     server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    if (connect(sockfd, (struct sockaddr *)&server_addr,
+                sizeof(server_addr)) < 0)
     {
-        perror("Connection failed");
+        printf("Connection failed.\n");
         return 1;
     }
 
-    printf("Connected to server.\n");
-    printf("Enter your name: ");
-    fgets(name, sizeof(name), stdin);
-    trim_newline(name);
-
-    pthread_create(&recv_thread, NULL, receive_messages, NULL);
+    pthread_t tid;
+    pthread_create(&tid, NULL, receive_messages, NULL);
 
     while (1)
     {
@@ -76,15 +81,22 @@ int main()
         trim_newline(message);
 
         if (strcmp(message, "exit") == 0)
-        {
-            close(sockfd);
             break;
+
+        /* guest is read-only */
+        if (strcmp(role, "guest") == 0)
+        {
+            printf("Guests cannot send messages.\n");
+            continue;
         }
 
-        snprintf(final_message, sizeof(final_message), "%s: %s\n", name, message);
+        snprintf(final_message, sizeof(final_message),
+                 "%s: %s\n", username, message);
 
-        send(sockfd, final_message, strlen(final_message), 0);
+        send(sockfd, final_message,
+             strlen(final_message), 0);
     }
 
+    close(sockfd);
     return 0;
 }
