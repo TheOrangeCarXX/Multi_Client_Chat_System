@@ -4,7 +4,7 @@
 
 int login_user(char username[], char password[], char role[])
 {
-    FILE *fp = fopen("data/users.txt", "r");
+    FILE *fp = fopen("./data/users.txt", "r");
 
     if (fp == NULL)
     {

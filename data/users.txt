@@ -1,3 +1,4 @@
 admin,1234,admin
 john,pass,user
 guest,0000,guest
+cook,him,user

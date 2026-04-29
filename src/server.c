@@ -4,10 +4,15 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include "../include/auth.h"
 
 #define PORT 8080
 #define MAX_CLIENTS 100
 #define BUFFER_SIZE 1024
+
+#define MAX_USERS 100
+char active_users[MAX_USERS][50];
+int active_count = 0;
 
 int client_sockets[MAX_CLIENTS];
 int client_count = 0;
@@ -52,6 +57,36 @@ void remove_client(int socket)
     pthread_mutex_unlock(&lock);
 }
 
+int is_user_logged_in(char username[])
+{
+    for (int i = 0; i < active_count; i++)
+    {
+        if (strcmp(active_users[i], username) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+void add_user(char username[])
+{
+    strcpy(active_users[active_count++], username);
+}
+
+void remove_user(char username[])
+{
+    for (int i = 0; i < active_count; i++)
+    {
+        if (strcmp(active_users[i], username) == 0)
+        {
+            for (int j = i; j < active_count - 1; j++)
+                strcpy(active_users[j], active_users[j + 1]);
+
+            active_count--;
+            break;
+        }
+    }
+}
+
 /* Thread function for each client */
 void *handle_client(void *arg)
 {
@@ -59,20 +94,70 @@ void *handle_client(void *arg)
     free(arg);
 
     char buffer[BUFFER_SIZE];
+    char username[50], password[50], role[50];
     int bytes_read;
 
     printf("Client connected: Socket %d\n", client_socket);
 
+    /* -------- STEP 1: RECEIVE LOGIN -------- */
+    bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
+
+    if (bytes_read <= 0)
+    {
+        close(client_socket);
+        pthread_exit(NULL);
+    }
+
+    buffer[bytes_read] = '\0';
+
+    if (sscanf(buffer, "LOGIN %s %s", username, password) != 2)
+    {
+        send(client_socket, "LOGIN_FAILED\n", 13, 0);
+        close(client_socket);
+        pthread_exit(NULL);
+    }
+
+    /* -------- STEP 2: VALIDATE USER -------- */
+    if (!login_user(username, password, role))
+    {
+        send(client_socket, "LOGIN_FAILED\n", 13, 0);
+        close(client_socket);
+        pthread_exit(NULL);
+    }
+
+    /* -------- STEP 3: CHECK DUPLICATE LOGIN -------- */
+    pthread_mutex_lock(&lock);
+
+    if (is_user_logged_in(username))
+    {
+        pthread_mutex_unlock(&lock);
+        send(client_socket, "ALREADY_LOGGED_IN\n", 19, 0);
+        close(client_socket);
+        pthread_exit(NULL);
+    }
+
+    add_user(username);
+    pthread_mutex_unlock(&lock);
+
+    send(client_socket, "LOGIN_SUCCESS\n", 14, 0);
+
+    printf("User logged in: %s\n", username);
+
+    /* -------- STEP 4: CHAT LOOP -------- */
     while ((bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0)) > 0)
     {
         buffer[bytes_read] = '\0';
 
-        printf("Received: %s", buffer);
-
+        printf("%s", buffer);
         broadcast_message(buffer, client_socket);
     }
 
-    printf("Client disconnected: Socket %d\n", client_socket);
+    /* -------- STEP 5: CLEANUP -------- */
+    printf("User disconnected: %s\n", username);
+
+    pthread_mutex_lock(&lock);
+    remove_user(username);
+    pthread_mutex_unlock(&lock);
 
     close(client_socket);
     remove_client(client_socket);
