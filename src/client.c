@@ -46,7 +46,7 @@ int main()
 
     int login_success = 0;
 
-    /* -------- LOGIN LOOP -------- */
+    /* -------- LOGIN LOOP FIRST -------- */
     while (!login_success)
     {
         printf("Username: ");
@@ -79,14 +79,14 @@ int main()
             continue;
         }
 
-        /* -------- SEND LOGIN -------- */
+        /* send login */
         char login_msg[200];
         snprintf(login_msg, sizeof(login_msg),
                  "LOGIN %s %s\n", username, password);
 
         send(sockfd, login_msg, strlen(login_msg), 0);
 
-        /* -------- RECEIVE RESPONSE -------- */
+        /* receive login response */
         int bytes = recv(sockfd, buffer, sizeof(buffer) - 1, 0);
 
         if (bytes <= 0)
@@ -100,14 +100,14 @@ int main()
 
         if (strncmp(buffer, "LOGIN_FAILED", 12) == 0)
         {
-            printf("Invalid credentials. Try again.\n\n");
+            printf("Invalid credentials.\n\n");
             close(sockfd);
             continue;
         }
 
         if (strncmp(buffer, "ALREADY_LOGGED_IN", 17) == 0)
         {
-            printf("User already logged in. Try another account.\n\n");
+            printf("User already logged in.\n\n");
             close(sockfd);
             continue;
         }
@@ -119,7 +119,7 @@ int main()
         }
         else
         {
-            printf("Unknown response. Try again.\n\n");
+            printf("Unknown response.\n");
             close(sockfd);
         }
     }
@@ -128,22 +128,51 @@ int main()
     pthread_t tid;
     pthread_create(&tid, NULL, receive_messages, NULL);
 
-    /* -------- CHAT LOOP -------- */
+    /* -------- MENU AFTER LOGIN -------- */
+    int choice;
+
     while (1)
     {
-        fgets(message, sizeof(message), stdin);
-        trim_newline(message);
+        printf("\n===== MENU =====\n");
+        printf("1. Enter Chat\n");
+        printf("2. Logout\n");
+        printf("Enter choice: ");
+        scanf("%d", &choice);
+        getchar();
 
-        if (strcmp(message, "exit") == 0)
-            break;
+        if (choice == 1) {
+            /* 🔥 REQUEST CHAT HISTORY HERE */
+            send(sockfd, "GET_HISTORY\n", 12, 0);
 
-        snprintf(final_message, sizeof(final_message),
-                 "%s: %s\n", username, message);
+            /* -------- CHAT LOOP -------- */
+            while (1)
+            {
+                fgets(message, sizeof(message), stdin);
+                trim_newline(message);
 
-        send(sockfd, final_message,
-             strlen(final_message), 0);
+                if (strcmp(message, "exit") == 0)
+                    break;
+
+                snprintf(final_message, sizeof(final_message),
+                        "%s: %s\n", username, message);
+
+                send(sockfd, final_message, strlen(final_message), 0);
+            }
+        }
+
+        if (choice == 2)
+        {
+            printf("Logging out...\n");
+            close(sockfd);
+            return 0;
+        }
+
+        if (choice != 1)
+        {
+            printf("Invalid choice.\n");
+            continue;
+        }
     }
 
-    close(sockfd);
     return 0;
 }

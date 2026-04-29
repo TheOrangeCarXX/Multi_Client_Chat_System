@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include "../include/auth.h"
+#include "../include/logger.h"
 
 #define PORT 8080
 #define MAX_CLIENTS 100
@@ -19,7 +20,7 @@ int client_count = 0;
 
 pthread_mutex_t lock;
 
-/* Broadcast message to everyone except sender */
+/* Broadcast message */
 void broadcast_message(char *message, int sender_socket)
 {
     pthread_mutex_lock(&lock);
@@ -35,7 +36,7 @@ void broadcast_message(char *message, int sender_socket)
     pthread_mutex_unlock(&lock);
 }
 
-/* Remove disconnected client */
+/* Remove client */
 void remove_client(int socket)
 {
     pthread_mutex_lock(&lock);
@@ -45,9 +46,7 @@ void remove_client(int socket)
         if (client_sockets[i] == socket)
         {
             for (int j = i; j < client_count - 1; j++)
-            {
                 client_sockets[j] = client_sockets[j + 1];
-            }
 
             client_count--;
             break;
@@ -57,6 +56,7 @@ void remove_client(int socket)
     pthread_mutex_unlock(&lock);
 }
 
+/* Active users logic */
 int is_user_logged_in(char username[])
 {
     for (int i = 0; i < active_count; i++)
@@ -87,7 +87,27 @@ void remove_user(char username[])
     }
 }
 
-/* Thread function for each client */
+/* Send chat history */
+void send_chat_history(int client_socket)
+{
+    FILE *fp = fopen("data/chatlog.txt", "r");
+    if (!fp) return;
+
+    char line[1024];
+
+    send(client_socket, "\n--- Chat History ---\n", 25, 0);
+
+    while (fgets(line, sizeof(line), fp))
+    {
+        send(client_socket, line, strlen(line), 0);
+    }
+
+    send(client_socket, "\n--------------------\n", 22, 0);
+
+    fclose(fp);
+}
+
+/* Client handler */
 void *handle_client(void *arg)
 {
     int client_socket = *((int *)arg);
@@ -97,11 +117,10 @@ void *handle_client(void *arg)
     char username[50], password[50], role[50];
     int bytes_read;
 
-    printf("Client connected: Socket %d\n", client_socket);
+    printf("Client connected\n");
 
-    /* -------- STEP 1: RECEIVE LOGIN -------- */
+    /* LOGIN */
     bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
-
     if (bytes_read <= 0)
     {
         close(client_socket);
@@ -117,7 +136,6 @@ void *handle_client(void *arg)
         pthread_exit(NULL);
     }
 
-    /* -------- STEP 2: VALIDATE USER -------- */
     if (!login_user(username, password, role))
     {
         send(client_socket, "LOGIN_FAILED\n", 13, 0);
@@ -125,7 +143,6 @@ void *handle_client(void *arg)
         pthread_exit(NULL);
     }
 
-    /* -------- STEP 3: CHECK DUPLICATE LOGIN -------- */
     pthread_mutex_lock(&lock);
 
     if (is_user_logged_in(username))
@@ -143,16 +160,24 @@ void *handle_client(void *arg)
 
     printf("User logged in: %s\n", username);
 
-    /* -------- STEP 4: CHAT LOOP -------- */
+    /* CHAT LOOP */
     while ((bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0)) > 0)
     {
         buffer[bytes_read] = '\0';
 
+        /* 🔥 HANDLE HISTORY REQUEST */
+        if (strncmp(buffer, "GET_HISTORY", 11) == 0)
+        {
+            send_chat_history(client_socket);
+            continue;
+        }
+
         printf("%s", buffer);
+        log_message(buffer);
         broadcast_message(buffer, client_socket);
     }
 
-    /* -------- STEP 5: CLEANUP -------- */
+    /* CLEANUP */
     printf("User disconnected: %s\n", username);
 
     pthread_mutex_lock(&lock);
@@ -165,6 +190,7 @@ void *handle_client(void *arg)
     pthread_exit(NULL);
 }
 
+/* MAIN SERVER */
 int main()
 {
     int server_socket;
@@ -175,29 +201,17 @@ int main()
 
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
 
-    if (server_socket < 0)
-    {
-        perror("Socket failed");
-        return 1;
-    }
+    int opt = 1;
+    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
     server_addr.sin_addr.s_addr = INADDR_ANY;
 
-    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        perror("Bind failed");
-        return 1;
-    }
+    bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    listen(server_socket, 10);
 
-    if (listen(server_socket, 10) < 0)
-    {
-        perror("Listen failed");
-        return 1;
-    }
-
-    printf("Server started on port %d...\n", PORT);
+    printf("Server running on port %d...\n", PORT);
 
     while (1)
     {
@@ -207,20 +221,8 @@ int main()
                                 (struct sockaddr *)&client_addr,
                                 &client_len);
 
-        if (*client_socket < 0)
-        {
-            perror("Accept failed");
-            free(client_socket);
-            continue;
-        }
-
         pthread_mutex_lock(&lock);
-
-        if (client_count < MAX_CLIENTS)
-        {
-            client_sockets[client_count++] = *client_socket;
-        }
-
+        client_sockets[client_count++] = *client_socket;
         pthread_mutex_unlock(&lock);
 
         pthread_t tid;
@@ -230,6 +232,5 @@ int main()
 
     close(server_socket);
     pthread_mutex_destroy(&lock);
-
     return 0;
 }
