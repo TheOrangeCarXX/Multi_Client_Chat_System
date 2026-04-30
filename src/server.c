@@ -18,16 +18,20 @@ int active_count = 0;
 int client_sockets[MAX_CLIENTS];
 int client_count = 0;
 
+#define MAX_ROOMS 5
+int client_rooms[MAX_CLIENTS];
+
 pthread_mutex_t lock;
 
 /* Broadcast message */
-void broadcast_message(char *message, int sender_socket)
+void broadcast_message(char *message, int sender_socket, int room)
 {
     pthread_mutex_lock(&lock);
 
     for (int i = 0; i < client_count; i++)
     {
-        if (client_sockets[i] != sender_socket)
+        if (client_sockets[i] != sender_socket &&
+            client_rooms[i] == room)
         {
             send(client_sockets[i], message, strlen(message), 0);
         }
@@ -88,9 +92,12 @@ void remove_user(char username[])
 }
 
 /* Send chat history */
-void send_chat_history(int client_socket)
+void send_chat_history(int client_socket, int room)
 {
-    FILE *fp = fopen("data/chatlog.txt", "r");
+    char filename[50];
+    sprintf(filename, "data/chatlog_room%d.txt", room);
+
+    FILE *fp = fopen(filename, "r");
     if (!fp) return;
 
     char line[1024];
@@ -110,6 +117,8 @@ void send_chat_history(int client_socket)
 /* Client handler */
 void *handle_client(void *arg)
 {
+    int room;
+    int index=-1;
     int client_socket = *((int *)arg);
     free(arg);
 
@@ -154,27 +163,69 @@ void *handle_client(void *arg)
     }
 
     add_user(username);
+    /* find index of this client */
+    for (int i = 0; i < client_count; i++)
+    {
+        if (client_sockets[i] == client_socket)
+        {
+            index = i;
+            break;
+        }
+    }
     pthread_mutex_unlock(&lock);
-
     send(client_socket, "LOGIN_SUCCESS\n", 14, 0);
 
     printf("User logged in: %s\n", username);
+    /* receive room selection */
+    int bytes = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
+    if (bytes > 0)
+    {
+        buffer[bytes] = '\0';
+        sscanf(buffer, "ROOM %d", &room);
+
+        client_rooms[index] = room;
+
+        printf("User %s joined room %d\n", username, room);
+    }
 
     /* CHAT LOOP */
     while ((bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0)) > 0)
     {
         buffer[bytes_read] = '\0';
 
-        /* 🔥 HANDLE HISTORY REQUEST */
-        if (strncmp(buffer, "GET_HISTORY", 11) == 0)
+        /* HANDLE ROOM SELECTION */
+        if (strncmp(buffer, "ROOM", 4) == 0)
         {
-            send_chat_history(client_socket);
+            sscanf(buffer, "ROOM %d", &room);
+            client_rooms[index] = room;
+
+            printf("User %s joined room %d\n", username, room);
             continue;
         }
 
-        printf("%s", buffer);
-        log_message(buffer);
-        broadcast_message(buffer, client_socket);
+        /* HANDLE CHAT HISTORY */
+        if (strncmp(buffer, "GET_HISTORY", 11) == 0)
+        {
+            send_chat_history(client_socket, client_rooms[index]);
+            continue;
+        }
+
+        /* NORMAL MESSAGE */
+        int current_room = client_rooms[index];
+
+        /* log to room file */
+        char filename[50];
+        sprintf(filename, "data/chatlog_room%d.txt", current_room);
+
+        FILE *fp = fopen(filename, "a");
+        if (fp)
+        {
+            fprintf(fp, "%s", buffer);
+            fclose(fp);
+        }
+
+        /* broadcast only to same room */
+        broadcast_message(buffer, client_socket, current_room);
     }
 
     /* CLEANUP */

@@ -141,7 +141,22 @@ int main()
         getchar();
 
         if (choice == 1) {
-            /* 🔥 REQUEST CHAT HISTORY HERE */
+            int room;
+
+            printf("\nSelect Chat Room:\n");
+            printf("1. Room 1\n");
+            printf("2. Room 2\n");
+            printf("3. Room 3\n");
+            printf("Enter choice: ");
+            scanf("%d", &room);
+            getchar();
+
+            /* send room to server */
+            char room_msg[50];
+            sprintf(room_msg, "ROOM %d\n", room);
+            send(sockfd, room_msg, strlen(room_msg), 0);
+
+            /* NOW request history */
             send(sockfd, "GET_HISTORY\n", 12, 0);
 
             /* -------- CHAT LOOP -------- */
