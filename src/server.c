@@ -7,6 +7,10 @@
 #include <time.h>
 #include "../include/auth.h"
 #include "../include/logger.h"
+#include "../include/ipc.h"
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 #define PORT 8080
 #define MAX_CLIENTS 100
@@ -362,6 +366,12 @@ void *handle_client(void *arg)
 
     printf("User logged in: %s (%s)\n", username, role);
 
+    /* Log login event via IPC pipe to logger process. */
+    char login_log[150];
+    snprintf(login_log, sizeof(login_log),
+             "LOGIN  user='%s' role='%s'\n", username, role);
+    log_message(login_log);
+
     /* ---- CHAT LOOP ---- */
     while ((bytes_read = recv(client_socket, buffer, sizeof(buffer) - 1, 0)) > 0)
     {
@@ -381,6 +391,12 @@ void *handle_client(void *arg)
 
             client_rooms[index] = room;
             printf("User %s joined room %d\n", username, room);
+
+            /* Log room join via IPC pipe. */
+            char room_log[150];
+            snprintf(room_log, sizeof(room_log),
+                     "ROOM_JOIN  user='%s' room=%d\n", username, room);
+            log_message(room_log);
             send(client_socket, "ROOM_OK\n", 8, 0);
             continue;
         }
@@ -458,6 +474,12 @@ void *handle_client(void *arg)
             send(client_socket, ban_ack, strlen(ban_ack), 0);
 
             printf("Admin %s banned user %s\n", username, target);
+
+            /* Log ban event via IPC pipe. */
+            char ban_log[150];
+            snprintf(ban_log, sizeof(ban_log),
+                     "BAN  admin='%s' target='%s'\n", username, target);
+            log_message(ban_log);
             continue;
         }
 
@@ -531,6 +553,12 @@ void *handle_client(void *arg)
     /* CLEANUP */
     printf("User disconnected: %s\n", username);
 
+    /* Log disconnect event via IPC pipe. */
+    char disc_log[150];
+    snprintf(disc_log, sizeof(disc_log),
+             "LOGOUT  user='%s'\n", username);
+    log_message(disc_log);
+
     pthread_mutex_lock(&lock);
     remove_user(username);
     pthread_mutex_unlock(&lock);
@@ -551,6 +579,51 @@ int main()
     socklen_t client_len = sizeof(client_addr);
 
     pthread_mutex_init(&lock, NULL);
+
+    /* ----------------------------------------------------------------
+     * IPC SETUP — fork the logger process then open the write end of
+     * the named pipe.  All log_message() calls in this process will
+     * be forwarded to the logger process via the FIFO.
+     * -------------------------------------------------------------- */
+
+    /* Step 1: create the FIFO on disk before forking so both the
+       child and parent can open it.                                   */
+    if (mkfifo(PIPE_PATH, 0666) < 0)
+        perror("mkfifo (may already exist — continuing)");
+
+    /* Step 2: fork the logger process.                                */
+    pid_t logger_pid = fork();
+
+    if (logger_pid < 0)
+    {
+        perror("fork logger_process");
+        exit(EXIT_FAILURE);
+    }
+
+    if (logger_pid == 0)
+    {
+        /* ---- CHILD: become the logger process ---- */
+        execl("./logger_process", "logger_process", (char *)NULL);
+        /* execl only returns on error */
+        perror("execl logger_process");
+        exit(EXIT_FAILURE);
+    }
+
+    /* ---- PARENT (server): open the write end of the FIFO ---- */
+    /* Small delay so the child process has time to open its read end. */
+    usleep(100000);   /* 100 ms */
+
+    if (ipc_init() < 0)
+    {
+        fprintf(stderr, "Failed to initialise IPC pipe. Exiting.\n");
+        kill(logger_pid, SIGTERM);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("[server] Logger process started (PID %d).\n", logger_pid);
+    log_message("=== Chat server started ===\n");
+
+    /* -------------------------------------------------------------- */
 
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -585,6 +658,11 @@ int main()
         pthread_create(&tid, NULL, handle_client, client_socket);
         pthread_detach(tid);
     }
+
+    /* Graceful shutdown (reached only if the accept loop is broken). */
+    log_message("=== Chat server stopped ===\n");
+    ipc_close();
+    waitpid(logger_pid, NULL, 0);
 
     close(server_socket);
     pthread_mutex_destroy(&lock);

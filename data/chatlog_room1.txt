@@ -15,3 +15,5 @@ cook: 2
 cook: 3
 [22:14] cook: ok
 [22:14] cook: i see
+[22:43] cook: is the chat working??
+[22:43] cook: i hope it is
